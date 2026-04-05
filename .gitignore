@@ -1,0 +1,7 @@
+.idea/
+dist/
+node_modules/
+
+# optional local files
+.DS_Store
+Thumbs.db
