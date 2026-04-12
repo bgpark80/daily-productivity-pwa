@@ -34,7 +34,9 @@ const formatTimeKey = (value = new Date()) =>
   }).format(value);
 
 const getDateFromKey = (dateKey) => new Date(`${dateKey}T00:00:00`);
-const getCurrentSeoulDate = () => getDateFromKey(formatDateKey(new Date()));
+const getCurrentSeoulDate = () => getDateFromKey(formatDateKey());
+const getCurrentSeoulDateKey = () => formatDateKey();
+const getCurrentSeoulTimeKey = () => formatTimeKey();
 const getMonthStart = (value) => new Date(value.getFullYear(), value.getMonth(), 1);
 const addMonths = (value, amount) => new Date(value.getFullYear(), value.getMonth() + amount, 1);
 
@@ -112,7 +114,6 @@ const parseEntriesFromDraft = (draft) => {
     return [];
   }
 
-  const now = new Date();
   const lines = trimmedDraft
     .split('\n')
     .map((line) => line.trim())
@@ -126,10 +127,10 @@ const parseEntriesFromDraft = (draft) => {
   return [
     {
       id: createEntryId(),
-      date: dateMatch?.[0] || formatDateKey(now),
+      date: dateMatch?.[0] || getCurrentSeoulDateKey(),
       title,
       type: inferType(trimmedDraft),
-      time: timeMatch?.[0] || formatTimeKey(now),
+      time: timeMatch?.[0] || getCurrentSeoulTimeKey(),
       tags: extractTags(trimmedDraft),
       preview,
       content: trimmedDraft

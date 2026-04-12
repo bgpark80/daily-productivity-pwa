@@ -80,9 +80,9 @@ textarea {
 }
 
 .hero-panel {
-  padding: 28px;
+  padding: 24px;
   display: grid;
-  gap: 24px;
+  gap: 18px;
 }
 
 .hero-top {
@@ -137,7 +137,7 @@ textarea {
   border-radius: var(--radius-xl);
   border: 1px solid rgba(148, 163, 184, 0.28);
   background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
-  padding: 20px;
+  padding: 16px;
 }
 
 .calendar-header,
@@ -177,7 +177,7 @@ textarea {
 }
 
 .calendar-month-row {
-  margin-top: 18px;
+  margin-top: 12px;
   align-items: center;
 }
 
@@ -189,10 +189,10 @@ textarea {
 }
 
 .calendar-grid {
-  margin-top: 16px;
+  margin-top: 12px;
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .calendar-day-name {
@@ -204,8 +204,8 @@ textarea {
 }
 
 .calendar-cell {
-  min-height: 84px;
-  padding: 10px;
+  min-height: 76px;
+  padding: 8px;
   border-radius: 20px;
   border: 1px solid rgba(148, 163, 184, 0.28);
   background: var(--surface-strong);
@@ -350,13 +350,13 @@ textarea {
 .top-grid {
   display: grid;
   grid-template-columns: minmax(320px, 0.95fr) minmax(0, 2fr);
-  gap: 24px;
+  gap: 16px;
 }
 
 .composer-panel,
 .archive-panel,
 .detail-panel {
-  padding: 24px;
+  padding: 20px;
 }
 
 .composer-box {
@@ -365,13 +365,13 @@ textarea {
   border: 1px dashed rgba(148, 163, 184, 0.6);
   background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
   border-radius: var(--radius-lg);
-  min-height: 240px;
-  padding: 16px;
+  min-height: 200px;
+  padding: 12px;
 }
 
 .composer-box textarea {
   width: 100%;
-  min-height: 208px;
+  min-height: 168px;
   border: 0;
   background: transparent;
   color: var(--text-main);
@@ -413,20 +413,20 @@ textarea {
 }
 
 .archive-groups {
-  margin-top: 22px;
+  margin-top: 16px;
   display: grid;
-  gap: 20px;
+  gap: 14px;
 }
 
 .date-group {
   border-radius: var(--radius-xl);
   border: 1px solid rgba(148, 163, 184, 0.28);
   background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
-  padding: 18px;
+  padding: 14px;
 }
 
 .date-group-header {
-  margin-bottom: 14px;
+  margin-bottom: 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -441,18 +441,18 @@ textarea {
 
 .entry-list {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .entry-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   border-radius: var(--radius-lg);
   border: 1px solid rgba(148, 163, 184, 0.3);
   background: var(--surface-strong);
-  padding: 16px;
+  padding: 14px;
 }
 
 .entry-card.selected {
@@ -499,7 +499,7 @@ textarea {
   border-radius: var(--radius-lg);
   border: 1px solid rgba(148, 163, 184, 0.3);
   background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
-  padding: 20px;
+  padding: 16px;
 }
 
 .detail-meta {
@@ -531,8 +531,8 @@ textarea {
 
 .detail-textarea {
   width: 100%;
-  min-height: 260px;
-  padding: 14px;
+  min-height: 220px;
+  padding: 12px;
   border-radius: 18px;
   border: 1px solid rgba(148, 163, 184, 0.5);
   background: var(--surface-strong);
@@ -596,13 +596,13 @@ textarea {
 .history-layout-grid {
   display: grid;
   grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.35fr);
-  gap: 24px;
+  gap: 16px;
 }
 
 .history-list-panel,
 .history-detail-panel,
 .history-empty {
-  padding: 24px;
+  padding: 20px;
 }
 
 .history-list {
@@ -706,7 +706,7 @@ textarea {
 
 @media (max-width: 640px) {
   .library-page {
-    padding: 16px;
+    padding: 12px;
   }
 
   .hero-panel,
@@ -717,11 +717,11 @@ textarea {
   .history-list-panel,
   .history-detail-panel,
   .history-empty {
-    padding: 20px;
+    padding: 14px;
   }
 
   .calendar-panel {
-    padding: 16px;
+    padding: 12px;
   }
 
   .button,
@@ -739,11 +739,63 @@ textarea {
   }
 
   .calendar-grid {
-    gap: 6px;
+    gap: 4px;
   }
 
   .calendar-cell {
-    min-height: 74px;
-    padding: 8px;
+    min-height: 64px;
+    padding: 6px;
+  }
+
+  .calendar-day-name {
+    padding: 4px 2px;
+    font-size: 0.78rem;
+  }
+
+  .calendar-month-row {
+    margin-top: 10px;
+  }
+
+  .top-grid {
+    gap: 12px;
+  }
+
+  .composer-box {
+    min-height: 160px;
+    padding: 10px;
+  }
+
+  .composer-box textarea {
+    min-height: 136px;
+  }
+
+  .archive-groups {
+    gap: 10px;
+  }
+
+  .date-group {
+    padding: 12px;
+  }
+
+  .entry-card {
+    padding: 12px;
+  }
+
+  .history-layout-grid {
+    gap: 12px;
+  }
+
+  .detail-card {
+    padding: 14px;
+  }
+
+  .detail-edit-grid {
+    gap: 10px;
+  }
+
+  .detail-textarea {
+    min-height: 180px;
+    padding: 10px;
+    line-height: 1.55;
   }
 }
