@@ -1,0 +1,10 @@
+{
+  "plan": "Pro",
+  "label": "Plan usage limit",
+  "scope": "Current session",
+  "usedPercent": 22,
+  "resetAt": "2026-04-26T20:00:00+09:00",
+  "resetLabel": "Resets in 2 hours",
+  "statusText": "22% used",
+  "description": "Bundled sample payload modeled after the Claude usage settings view."
+}
