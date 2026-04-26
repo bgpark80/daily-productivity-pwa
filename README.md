@@ -1,86 +1,96 @@
-# Daily Focus PWA
+# Claude Usage Dashboard PWA
 
-Daily Focus is a simple React Progressive Web App for managing everyday tasks. It lets you sort tasks into **Want to do** and **Must do**, mark them as complete, edit them, delete them, and keep everything saved in local storage.
+Claude Code telemetry usage dashboard for web deployment.
 
-## Features
+## What it shows
 
-- Add, edit, delete, and complete tasks
-- Separate tasks into `Want to do` and `Must do`
-- View completed tasks in a separate section
-- Save tasks in browser local storage
-- Responsive mobile-friendly layout
-- PWA support with `manifest.json` and `service worker`
-- Basic offline support after the app is loaded once
+- session cost estimate
+- token usage by type
+- session count
+- lines added and removed
+- commit and pull request counts
+- active time and edit accept/reject counts
+- model-by-model cost and token totals
+- manual cost and token limits
 
-## Project Structure
+## Important limitation
+
+This app visualizes telemetry usage. It does not know the exact remaining quota of a personal Claude subscription.
+
+## Unified local and production model
+
+Local development and production now use the same contract:
+
+- the frontend reads only `GET /api/metrics`
+- the backend decides whether `/api/metrics` serves sample data or proxies an upstream metrics source
+
+Supported environment variables:
+
+- `CLAUDE_METRICS_MODE=sample|upstream`
+- `CLAUDE_METRICS_UPSTREAM=http://host:port/metrics`
+- `CLAUDE_METRICS_SAMPLE_PATH=relative/or/absolute/path`
+- `CLAUDE_USAGE_LIMIT_MODE=sample|upstream`
+- `CLAUDE_USAGE_LIMIT_UPSTREAM=https://host/api/usage-limit.json`
+- `CLAUDE_USAGE_LIMIT_SAMPLE_PATH=relative/or/absolute/path`
+
+Behavior:
+
+- if `CLAUDE_METRICS_MODE` is omitted and no upstream is set, `/api/metrics` serves the bundled sample file
+- if `CLAUDE_METRICS_MODE=upstream`, `/api/metrics` proxies `CLAUDE_METRICS_UPSTREAM`
+- if `CLAUDE_USAGE_LIMIT_MODE` is omitted and no upstream is set, `/api/usage-limit` serves the bundled sample JSON
+- if `CLAUDE_USAGE_LIMIT_MODE=upstream`, `/api/usage-limit` proxies `CLAUDE_USAGE_LIMIT_UPSTREAM`
+
+## Local development
+
+Default local run:
+
+```powershell
+cd D:\GIT_PWA
+npm run claude:web
+```
+
+Then open:
 
 ```text
-daily-productivity-pwa/
-├─ public/
-│  ├─ icons/
-│  │  ├─ icon-192.png
-│  │  ├─ icon-512.png
-│  │  └─ icon-maskable-512.png
-│  ├─ manifest.json
-│  ├─ offline.html
-│  └─ sw.js
-├─ src/
-│  ├─ components/
-│  │  ├─ TaskForm.jsx
-│  │  ├─ TaskItem.jsx
-│  │  └─ TaskSection.jsx
-│  ├─ hooks/
-│  │  └─ useLocalStorage.js
-│  ├─ App.jsx
-│  ├─ main.jsx
-│  └─ styles.css
-├─ index.html
-├─ package.json
-└─ vite.config.js
+http://localhost:5173
 ```
 
-## What Each Folder Does
+This works immediately because local `/api/metrics` defaults to sample mode.
 
-- `src/` contains the React app code.
-- `src/components/` holds small reusable UI components.
-- `src/hooks/` contains the custom local storage hook.
-- `public/` contains PWA files that are copied as-is when the app is built.
+### Local development with a real metrics upstream
 
-## How to Run Locally
+```powershell
+$env:CLAUDE_METRICS_MODE="upstream"
+$env:CLAUDE_METRICS_UPSTREAM="http://127.0.0.1:9464/metrics"
+$env:CLAUDE_USAGE_LIMIT_MODE="upstream"
+$env:CLAUDE_USAGE_LIMIT_UPSTREAM="https://your-server.example/api/usage-limit.json"
+npm run claude:web
+```
 
-1. Install **Node.js 18+** and **npm**.
-2. Open a terminal in `daily-productivity-pwa`.
-3. Install packages:
+## Production-style local run
 
-   ```bash
-   npm install
-   ```
-
-4. Start the development server:
-
-   ```bash
-   npm run dev
-   ```
-
-5. Open the local URL shown in the terminal.
-
-## How to Test the PWA Features
-
-Service workers are best tested in the production preview:
-
-```bash
+```powershell
 npm run build
-npm run preview
+npm run claude:pwa
 ```
 
-Then open the preview URL in your browser and:
+Then open:
 
-- check that the app can be installed
-- refresh the page after adding tasks
-- test offline mode after loading the app once
+```text
+http://localhost:4173
+```
 
-## Notes
+### Production-style local run with a real metrics upstream
 
-- Tasks are stored in the browser using local storage.
-- If you clear browser storage, your tasks will be removed.
-- The app UI is written in English.
+```powershell
+$env:CLAUDE_METRICS_MODE="upstream"
+$env:CLAUDE_METRICS_UPSTREAM="http://127.0.0.1:9464/metrics"
+$env:CLAUDE_USAGE_LIMIT_MODE="upstream"
+$env:CLAUDE_USAGE_LIMIT_UPSTREAM="https://your-server.example/api/usage-limit.json"
+npm run build
+npm run claude:pwa
+```
+
+## Deployment note
+
+In production, deploy the static frontend and make sure the same origin serves both `/api/metrics` and `/api/usage-limit`.

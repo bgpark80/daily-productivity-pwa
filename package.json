@@ -6,7 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "claude:web": "vite --host --port 5173 --strictPort",
+    "claude:pwa": "node scripts/serve-claude-pwa.mjs",
+    "claude:monitor": "node scripts/claude-usage-monitor.mjs",
+    "claude:monitor:once": "node scripts/claude-usage-monitor.mjs --once",
+    "claude:monitor:sample": "node scripts/claude-usage-monitor.mjs --input scripts/claude-metrics-sample.prom --once"
   },
   "dependencies": {
     "react": "18.2.0",

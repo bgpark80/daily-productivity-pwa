@@ -1,875 +1,703 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import useLocalStorage from './hooks/useLocalStorage';
+import { useEffect, useMemo, useState } from 'react';
 
-const STORAGE_KEY = 'notification-history-library';
-const STORAGE_RESET_KEY = 'notification-history-library-reset';
-const STORAGE_RESET_VERSION = '2026-04-12-empty-state';
-const ALL_TYPES_LABEL = '전체 유형';
-const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const DEFAULT_TIME_ZONE = 'Asia/Seoul';
-const NATURAL_READER_URL = 'https://www.naturalreaders.com/online/';
+const DEFAULT_REFRESH_MS = 5000;
+const DEFAULT_ENDPOINT = '/api/metrics';
+const SAMPLE_ENDPOINT = '/claude-metrics-sample.prom';
+const DEFAULT_USAGE_LIMIT_ENDPOINT = '/api/usage-limit';
+const SAMPLE_USAGE_LIMIT_ENDPOINT = '/claude-usage-limit-sample.json';
+const LIMITS_STORAGE_KEY = 'claude-usage-dashboard-limits-v1';
 
-const createEntryId = () => {
-  if (window.crypto?.randomUUID) {
-    return window.crypto.randomUUID();
-  }
-
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const EMPTY_SNAPSHOT = {
+  collectedAt: '',
+  sessions: 0,
+  costUsd: 0,
+  tokens: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheCreation: 0,
+    total: 0
+  },
+  lines: {
+    added: 0,
+    removed: 0
+  },
+  commits: 0,
+  pullRequests: 0,
+  activeSeconds: {
+    cli: 0,
+    user: 0,
+    total: 0
+  },
+  editDecisions: {
+    accept: 0,
+    reject: 0
+  },
+  models: []
 };
 
-const formatDateKey = (value = new Date()) =>
-  new Intl.DateTimeFormat('en-CA', {
-    timeZone: DEFAULT_TIME_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).format(value);
-
-const formatTimeKey = (value = new Date()) =>
-  new Intl.DateTimeFormat('en-GB', {
-    timeZone: DEFAULT_TIME_ZONE,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  }).format(value);
-
-const getDateFromKey = (dateKey) => new Date(`${dateKey}T00:00:00`);
-const getCurrentSeoulDate = () => getDateFromKey(formatDateKey());
-const getCurrentSeoulDateKey = () => formatDateKey();
-const getCurrentSeoulTimeKey = () => formatTimeKey();
-const getMonthStart = (value) => new Date(value.getFullYear(), value.getMonth(), 1);
-const addMonths = (value, amount) => new Date(value.getFullYear(), value.getMonth() + amount, 1);
-
-const inferType = (text) => {
-  const normalized = text.toLowerCase();
-
-  if (normalized.includes('태국어')) {
-    return '태국어';
-  }
-
-  if (normalized.includes('회화') || normalized.includes('문장')) {
-    return '회화';
-  }
-
-  if (normalized.includes('뉴스') || normalized.includes('briefing') || normalized.includes('reuters')) {
-    return '뉴스';
-  }
-
-  return '기타';
+const EMPTY_USAGE_LIMIT = {
+  plan: '',
+  label: 'Plan usage limit',
+  scope: 'Current session',
+  usedPercent: 0,
+  resetAt: '',
+  resetLabel: '',
+  statusText: '',
+  description: ''
 };
 
-const extractTags = (text) => {
-  const firstLine = text.split(/\r?\n/, 1)[0] || '';
-  const matches = [...firstLine.matchAll(/\[([^\[\]]+)\]/g)].map((match) => match[1].trim()).filter(Boolean);
-  return [...new Set(matches)];
-};
+function normalizeMetricName(metricName) {
+  return metricName.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
 
-const parseRoute = (pathname = window.location.pathname) => {
-  const historyMatch = pathname.match(/^\/history\/(\d{4}-\d{2}-\d{2})\/?$/);
-
-  if (historyMatch) {
-    return { name: 'history', date: historyMatch[1] };
+function parseLabels(rawLabels) {
+  if (!rawLabels) {
+    return {};
   }
 
-  return { name: 'library' };
-};
+  const labels = {};
+  const matcher = /(\w+)="((?:\\"|[^"])*)"/g;
 
-const pushRoute = (path, setRoute) => {
-  if (window.location.pathname !== path) {
-    window.history.pushState({}, '', path);
+  for (const match of rawLabels.matchAll(matcher)) {
+    labels[match[1]] = match[2].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
   }
 
-  setRoute(parseRoute(path));
-  window.scrollTo(0, 0);
-};
+  return labels;
+}
 
-const normalizeEntries = (entries) => {
-  if (!Array.isArray(entries)) {
-    return [];
-  }
+function parsePrometheusMetrics(rawText) {
+  const metrics = [];
+  const lines = rawText.split(/\r?\n/);
 
-  const normalizedEntries = entries
-    .filter((entry) => entry && typeof entry === 'object')
-    .map((entry) => ({
-      id: typeof entry.id === 'string' && entry.id ? entry.id : createEntryId(),
-      date: typeof entry.date === 'string' && entry.date ? entry.date : formatDateKey(),
-      title: typeof entry.title === 'string' ? entry.title.trim() : '',
-      type: typeof entry.type === 'string' && entry.type ? entry.type : inferType(entry.title || ''),
-      time: typeof entry.time === 'string' && entry.time ? entry.time : formatTimeKey(),
-      tags: Array.isArray(entry.tags)
-        ? [...new Set(entry.tags.filter((tag) => typeof tag === 'string').map((tag) => tag.trim()).filter(Boolean))]
-        : extractTags(`${entry.title || ''} ${entry.content || ''}`),
-      preview: typeof entry.preview === 'string' ? entry.preview.trim() : '',
-      content: typeof entry.content === 'string' ? entry.content.trim() : ''
-    }))
-    .filter((entry) => entry.title);
+  for (const line of lines) {
+    const trimmed = line.trim();
 
-  return normalizedEntries;
-};
-
-const parseEntriesFromDraft = (draft) => {
-  const trimmedDraft = draft.trim();
-
-  if (!trimmedDraft) {
-    return [];
-  }
-
-  const lines = trimmedDraft
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const title = lines[0] || '새 알림';
-  const summaryLine = lines.slice(1).join(' ');
-  const preview = (summaryLine || trimmedDraft).slice(0, 120);
-  const dateMatch = trimmedDraft.match(/\b\d{4}-\d{2}-\d{2}\b/);
-  const timeMatch = trimmedDraft.match(/\b\d{1,2}:\d{2}\b/);
-
-  return [
-    {
-      id: createEntryId(),
-      date: dateMatch?.[0] || getCurrentSeoulDateKey(),
-      title,
-      type: inferType(trimmedDraft),
-      time: timeMatch?.[0] || getCurrentSeoulTimeKey(),
-      tags: extractTags(trimmedDraft),
-      preview,
-      content: trimmedDraft
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
     }
-  ];
-};
 
-const buildEntryPatch = ({ title, content, currentEntry }) => {
-  const normalizedTitle = title.trim() || currentEntry.title || '새 알림';
-  const normalizedContent = content.replace(/\r\n/g, '\n').trim();
-  const previewSource = normalizedContent || normalizedTitle;
-  const preview = previewSource.slice(0, 120);
-  const combinedText = `${normalizedTitle}\n${normalizedContent}`;
+    const match = trimmed.match(
+      /^([^{\s]+)(?:\{([^}]*)\})?\s+([-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?)$/
+    );
+
+    if (!match) {
+      continue;
+    }
+
+    metrics.push({
+      name: match[1],
+      labels: parseLabels(match[2]),
+      value: Number(match[3]),
+      canonicalName: normalizeMetricName(match[1])
+    });
+  }
+
+  return metrics;
+}
+
+function roundToTwo(value) {
+  return Math.round(value * 100) / 100;
+}
+
+function aggregateMetrics(metrics) {
+  const snapshot = {
+    ...EMPTY_SNAPSHOT,
+    collectedAt: new Date().toISOString(),
+    tokens: { ...EMPTY_SNAPSHOT.tokens },
+    lines: { ...EMPTY_SNAPSHOT.lines },
+    activeSeconds: { ...EMPTY_SNAPSHOT.activeSeconds },
+    editDecisions: { ...EMPTY_SNAPSHOT.editDecisions },
+    models: []
+  };
+  const modelMap = new Map();
+
+  for (const metric of metrics) {
+    const name = metric.canonicalName;
+    const modelName = metric.labels.model || 'unknown';
+    const modelEntry = modelMap.get(modelName) || { name: modelName, costUsd: 0, tokens: 0 };
+
+    if (name.startsWith('claudecodesessioncount')) {
+      snapshot.sessions += metric.value;
+      continue;
+    }
+
+    if (name.startsWith('claudecodelinesofcodecount')) {
+      if (metric.labels.type === 'removed') {
+        snapshot.lines.removed += metric.value;
+      } else {
+        snapshot.lines.added += metric.value;
+      }
+      continue;
+    }
+
+    if (name.startsWith('claudecodepullrequestcount')) {
+      snapshot.pullRequests += metric.value;
+      continue;
+    }
+
+    if (name.startsWith('claudecodecommitcount')) {
+      snapshot.commits += metric.value;
+      continue;
+    }
+
+    if (name.startsWith('claudecodecostusage')) {
+      snapshot.costUsd += metric.value;
+      modelEntry.costUsd += metric.value;
+      modelMap.set(modelName, modelEntry);
+      continue;
+    }
+
+    if (name.startsWith('claudecodetokenusage')) {
+      const type = metric.labels.type || 'unknown';
+      if (type in snapshot.tokens) {
+        snapshot.tokens[type] += metric.value;
+      }
+      snapshot.tokens.total += metric.value;
+      modelEntry.tokens += metric.value;
+      modelMap.set(modelName, modelEntry);
+      continue;
+    }
+
+    if (name.startsWith('claudecodecodeedittooldecision')) {
+      const decision = metric.labels.decision || 'unknown';
+      if (decision in snapshot.editDecisions) {
+        snapshot.editDecisions[decision] += metric.value;
+      }
+      continue;
+    }
+
+    if (name.startsWith('claudecodeactivetimetotal')) {
+      const type = metric.labels.type;
+      if (type === 'cli' || type === 'user') {
+        snapshot.activeSeconds[type] += metric.value;
+      }
+      snapshot.activeSeconds.total += metric.value;
+    }
+  }
+
+  snapshot.costUsd = roundToTwo(snapshot.costUsd);
+  snapshot.models = [...modelMap.values()].sort((left, right) => {
+    const costGap = right.costUsd - left.costUsd;
+    if (costGap !== 0) {
+      return costGap;
+    }
+    return right.tokens - left.tokens;
+  });
+
+  return snapshot;
+}
+
+function normalizeUsageLimit(rawValue) {
+  const usedPercent = Number(rawValue?.usedPercent);
 
   return {
-    title: normalizedTitle,
-    content: normalizedContent,
-    preview,
-    type: inferType(combinedText),
-    tags: extractTags(normalizedTitle)
+    plan: typeof rawValue?.plan === 'string' ? rawValue.plan : '',
+    label: typeof rawValue?.label === 'string' ? rawValue.label : 'Plan usage limit',
+    scope: typeof rawValue?.scope === 'string' ? rawValue.scope : 'Current session',
+    usedPercent: Number.isFinite(usedPercent) ? clampPercent(usedPercent) : 0,
+    resetAt: typeof rawValue?.resetAt === 'string' ? rawValue.resetAt : '',
+    resetLabel: typeof rawValue?.resetLabel === 'string' ? rawValue.resetLabel : '',
+    statusText: typeof rawValue?.statusText === 'string' ? rawValue.statusText : '',
+    description: typeof rawValue?.description === 'string' ? rawValue.description : ''
   };
-};
+}
 
-const speakText = (text) => {
-  if (!('speechSynthesis' in window) || !text) {
-    return false;
+function formatNumber(value, digits = 0) {
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits
+  }).format(value);
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value);
+}
+
+function formatDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${remainder}s`;
   }
 
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
-  return true;
-};
+  if (minutes > 0) {
+    return `${minutes}m ${remainder}s`;
+  }
 
-const buildCalendarCells = (baseDate, entriesByDate) => {
-  const year = baseDate.getFullYear();
-  const monthIndex = baseDate.getMonth();
-  const firstDayIndex = new Date(year, monthIndex, 1).getDay();
-  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
-  const totalCells = Math.ceil((firstDayIndex + daysInMonth) / 7) * 7;
+  return `${remainder}s`;
+}
 
-  return Array.from({ length: totalCells }, (_, index) => {
-    const dayNumber = index - firstDayIndex + 1;
+function formatTimestamp(value) {
+  if (!value) {
+    return '-';
+  }
 
-    if (dayNumber < 1 || dayNumber > daysInMonth) {
-      return { key: `empty-${index}`, isEmpty: true };
+  return new Date(value).toLocaleString();
+}
+
+function readStoredLimits() {
+  if (typeof window === 'undefined') {
+    return { costLimit: '', tokenLimit: '' };
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(LIMITS_STORAGE_KEY);
+    if (!rawValue) {
+      return { costLimit: '', tokenLimit: '' };
     }
 
-    const dateKey = formatDateKey(new Date(year, monthIndex, dayNumber));
-    const dayEntries = entriesByDate.get(dateKey) || [];
-
+    const parsed = JSON.parse(rawValue);
     return {
-      key: dateKey,
-      isEmpty: false,
-      dateKey,
-      dayNumber,
-      hasEntries: dayEntries.length > 0,
-      tags: [...new Set(dayEntries.flatMap((entry) => entry.tags || []))].slice(0, 3)
+      costLimit: typeof parsed.costLimit === 'string' ? parsed.costLimit : '',
+      tokenLimit: typeof parsed.tokenLimit === 'string' ? parsed.tokenLimit : ''
     };
-  });
-};
+  } catch {
+    return { costLimit: '', tokenLimit: '' };
+  }
+}
 
-function LibraryPage({
-  entries,
-  groupedEntries,
-  availableTypes,
-  searchTerm,
-  setSearchTerm,
-  typeFilter,
-  setTypeFilter,
-  draft,
-  setDraft,
-  onOrganizeDraft,
-  onClearData,
-  onOpenDate,
-  onOpenEntry,
-  textareaRef
-}) {
-  const entriesByDate = useMemo(() => {
-    const groupedMap = new Map();
+function parseLimit(value) {
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    return 0;
+  }
+  return parsed;
+}
 
-    entries.forEach((entry) => {
-      const bucket = groupedMap.get(entry.date) || [];
-      bucket.push(entry);
-      groupedMap.set(entry.date, bucket);
-    });
+function clampPercent(value) {
+  return Math.max(0, Math.min(100, value));
+}
 
-    return groupedMap;
-  }, [entries]);
-
-  const [calendarBaseDate, setCalendarBaseDate] = useState(() => getMonthStart(getCurrentSeoulDate()));
-  const calendarMonthLabel = `${calendarBaseDate.getFullYear()}년 ${calendarBaseDate.getMonth() + 1}월`;
-  const calendarCells = buildCalendarCells(calendarBaseDate, entriesByDate);
-
+function StatCard({ label, value, tone = 'default', meta }) {
   return (
-    <main className="library-page">
-      <div className="library-layout">
-        <header className="surface hero-panel">
-          <div className="hero-top">
-            <div className="hero-copy">
-              <h1>알림 히스토리 라이브러리</h1>
-              <p>
-                알림으로 받은 내용을 붙여넣으면 날짜별로 자동 정리하고, 나중에 다시 읽고 들을 수 있게
-                보관하는 화면
-              </p>
-            </div>
-
-            <div className="hero-actions">
-              <button type="button" className="button button-solid" onClick={() => textareaRef.current?.focus()}>
-                새 내용 붙여넣기
-              </button>
-            </div>
-          </div>
-
-          <section className="calendar-panel">
-            <div className="calendar-header">
-              <div>
-                <h2>달력으로 보기</h2>
-                <p>날짜를 누르면 그날 저장된 글 목록을 새 페이지에서 확인할 수 있습니다. 달력에는 첫 줄의 대괄호 태그만 표시됩니다.</p>
-              </div>
-            </div>
-
-            <div className="calendar-month-row">
-              <div className="calendar-month-controls">
-                <button
-                  type="button"
-                  className="button button-outline button-small"
-                  onClick={() => setCalendarBaseDate((currentDate) => addMonths(currentDate, -1))}
-                >
-                  이전 달
-                </button>
-                <strong>{calendarMonthLabel}</strong>
-                <button
-                  type="button"
-                  className="button button-outline button-small"
-                  onClick={() => setCalendarBaseDate((currentDate) => addMonths(currentDate, 1))}
-                >
-                  다음 달
-                </button>
-              </div>
-              <span>저장된 날짜를 눌러 상세 페이지로 이동</span>
-            </div>
-
-            <div className="calendar-grid">
-              {DAYS_OF_WEEK.map((day) => (
-                <div key={day} className="calendar-day-name">
-                  {day}
-                </div>
-              ))}
-
-              {calendarCells.map((cell) =>
-                cell.isEmpty ? (
-                  <div key={cell.key} className="calendar-cell empty" />
-                ) : (
-                  <button
-                    key={cell.key}
-                    type="button"
-                    className={`calendar-cell${cell.hasEntries ? ' linked' : ''}`}
-                    onClick={() => onOpenDate(cell.dateKey)}
-                    disabled={!cell.hasEntries}
-                  >
-                    <div className="calendar-cell-inner">
-                      <div className="calendar-cell-top">
-                        <div className="calendar-date-number">{cell.dayNumber}</div>
-                        {cell.hasEntries ? <span className="calendar-detail-link">상세</span> : null}
-                      </div>
-
-                      <div className="calendar-tags">
-                        {cell.tags.map((tag) => (
-                          <span key={`${cell.dateKey}-tag-${tag}`} className="calendar-tag outlined">
-                            [{tag}]
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  </button>
-                )
-              )}
-            </div>
-          </section>
-        </header>
-
-        <section className="top-grid">
-          <section className="surface composer-panel">
-            <div className="section-copy">
-              <h2>입력 영역</h2>
-              <p>현재 알림 내용을 그대로 붙여넣는 곳</p>
-            </div>
-
-            <label className="composer-box">
-              <span className="sr-only">알림 내용 입력</span>
-              <textarea
-                ref={textareaRef}
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder={
-                  '여기에 알림 내용을 그대로 붙여넣기\n입력창에 넣은 전체 내용은 한 번에 같은 날짜의 한 글로 저장됩니다.\n예: 오늘의 영어 뉴스 브리핑 [CNN] [BBC]'
-                }
-              />
-            </label>
-
-            <p className="composer-note">
-              입력된 내용 안의 <strong>[대괄호 키워드]</strong>는 저장할 때 자동 추출되어 달력 날짜 칸과
-              날짜별 상세 페이지에 함께 표시됩니다. 첫 줄의 대괄호만 사용하고, 여러 줄을 넣어도 하나의
-              글로 저장됩니다.
-            </p>
-
-            <div className="stack-actions">
-              <button type="button" className="button button-solid button-block" onClick={onOrganizeDraft}>
-                날짜별로 정리하기
-              </button>
-              <button type="button" className="button button-outline button-block" onClick={onClearData}>
-                저장 데이터 비우기
-              </button>
-            </div>
-          </section>
-
-          <section className="surface archive-panel">
-            <div className="archive-toolbar">
-              <div className="section-copy">
-                <h2>보관된 알림</h2>
-                <p>날짜별, 유형별로 확인하고 날짜 상세 페이지로 이동할 수 있습니다.</p>
-              </div>
-
-              <div className="filter-row">
-                <input
-                  type="search"
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
-                  className="field"
-                  placeholder="검색"
-                />
-                <select
-                  value={typeFilter}
-                  onChange={(event) => setTypeFilter(event.target.value)}
-                  className="field"
-                >
-                  {availableTypes.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="archive-groups">
-              {groupedEntries.length === 0 ? (
-                <div className="empty-panel">
-                  저장된 항목이 없습니다. 입력 영역에 실제 알림 내용을 붙여넣고 저장해 보세요.
-                </div>
-              ) : (
-                groupedEntries.map((group) => (
-                  <section key={group.date} className="date-group">
-                    <div className="date-group-header">
-                      <h3>{group.date}</h3>
-                      <button type="button" className="text-link" onClick={() => onOpenDate(group.date)}>
-                        이 날짜 열기
-                      </button>
-                    </div>
-
-                    <div className="entry-list">
-                      {group.items.map((entry) => (
-                        <article key={entry.id} className="entry-card">
-                          <div className="entry-main">
-                            <div className="entry-meta">
-                              <span className="pill">{entry.type}</span>
-                              <span className="entry-time">{entry.time}</span>
-                              {(entry.tags || []).map((tag) => (
-                                <span key={tag} className="pill">
-                                  [{tag}]
-                                </span>
-                              ))}
-                            </div>
-                            <h4>{entry.title}</h4>
-                            <p>{entry.preview}</p>
-                          </div>
-
-                          <div className="entry-actions">
-                            <button
-                              type="button"
-                              className="button button-outline button-small"
-                              onClick={() => onOpenEntry(entry)}
-                            >
-                              읽기
-                            </button>
-                            <button
-                              type="button"
-                              className="button button-solid button-small"
-                              onClick={() => onOpenEntry(entry, true)}
-                            >
-                              듣기
-                            </button>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  </section>
-                ))
-              )}
-            </div>
-          </section>
-        </section>
-      </div>
-    </main>
+    <article className={`stat-card stat-card-${tone}`}>
+      <span className="stat-label">{label}</span>
+      <strong className="stat-value">{value}</strong>
+      {meta ? <span className="stat-meta">{meta}</span> : null}
+    </article>
   );
 }
 
-function HistoryPage({
-  date,
-  entries,
-  selectedEntry,
-  speechSupported,
-  isSpeaking,
-  onBack,
-  onSelectEntry,
-  onListenEntry,
-  onStopSpeaking,
-  onCopySelected,
-  onOpenNaturalReader,
-  onCopyAndOpenNaturalReader,
-  onDeleteSelected,
-  onSaveSelected
-}) {
-  const [editTitle, setEditTitle] = useState('');
-  const [editContent, setEditContent] = useState('');
+function MetricRow({ label, value, accent }) {
+  return (
+    <div className="metric-row">
+      <span>{label}</span>
+      <strong className={accent ? `metric-${accent}` : ''}>{value}</strong>
+    </div>
+  );
+}
 
-  useEffect(() => {
-    setEditTitle(selectedEntry?.title || '');
-    setEditContent(selectedEntry?.content || '');
-  }, [selectedEntry]);
+function LimitProgress({ label, used, limit, formatter }) {
+  if (!limit) {
+    return (
+      <div className="limit-progress">
+        <div className="limit-progress-head">
+          <span>{label}</span>
+          <strong>No limit set</strong>
+        </div>
+      </div>
+    );
+  }
+
+  const ratio = limit > 0 ? used / limit : 0;
+  const percent = clampPercent(ratio * 100);
+  const remaining = Math.max(0, limit - used);
+  const exceeded = used > limit;
 
   return (
-    <main className="library-page history-page">
-      <div className="library-layout">
-        <header className="surface history-header">
-          <button type="button" className="text-link" onClick={onBack}>
-            ← 라이브러리로 돌아가기
-          </button>
-
-          <div className="history-header-copy">
-            <h1>{date}</h1>
-            <p>이 날짜에 저장된 글들을 모아 보는 상세 페이지입니다.</p>
-          </div>
-
-          <div className="route-label">Route: /history/{date}</div>
-        </header>
-
-        {entries.length === 0 ? (
-          <section className="surface history-empty">
-            <h2>저장된 글이 없습니다</h2>
-            <p>이 날짜에는 아직 등록된 항목이 없습니다. 메인 화면에서 새 알림을 저장해 보세요.</p>
-          </section>
-        ) : (
-          <section className="history-layout-grid">
-            <section className="surface history-list-panel">
-              <div className="section-copy">
-                <h2>등록된 글</h2>
-                <p>{entries.length}개 항목</p>
-              </div>
-
-              <div className="history-list">
-                {entries.map((entry) => (
-                  <article
-                    key={entry.id}
-                    className={`history-card${selectedEntry?.id === entry.id ? ' selected' : ''}`}
-                  >
-                    <button type="button" className="history-card-button" onClick={() => onSelectEntry(entry.id)}>
-                      <div className="entry-meta">
-                        <span className="pill">{entry.type}</span>
-                        <span className="entry-time">{entry.time}</span>
-                      </div>
-                      <h3>{entry.title}</h3>
-                      <p>{entry.preview}</p>
-                      <div className="history-card-tags">
-                        {(entry.tags || []).map((tag) => (
-                          <span key={tag} className="pill">
-                            [{tag}]
-                          </span>
-                        ))}
-                      </div>
-                    </button>
-
-                    <div className="entry-actions">
-                      <button
-                        type="button"
-                        className="button button-outline button-small"
-                        onClick={() => onSelectEntry(entry.id)}
-                      >
-                        읽기
-                      </button>
-                      <button
-                        type="button"
-                        className="button button-solid button-small"
-                        onClick={() => onListenEntry(entry)}
-                      >
-                        듣기
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </section>
-
-            <section className="surface history-detail-panel">
-              <div className="section-copy">
-                <h2>글 내용</h2>
-                <p>선택한 글의 전체 내용을 다시 읽고 들을 수 있습니다.</p>
-              </div>
-
-              {selectedEntry ? (
-                <div className="detail-card">
-                  <div className="detail-meta">
-                    <span className="pill">{selectedEntry.type}</span>
-                    <span className="pill">{selectedEntry.date}</span>
-                    <span className="pill">{selectedEntry.time}</span>
-                    {(selectedEntry.tags || []).map((tag) => (
-                      <span key={tag} className="pill">
-                        [{tag}]
-                      </span>
-                    ))}
-                  </div>
-
-                  <div className="detail-edit-grid">
-                    <label className="detail-field">
-                      <span>제목</span>
-                      <input
-                        type="text"
-                        className="field"
-                        value={editTitle}
-                        onChange={(event) => setEditTitle(event.target.value)}
-                      />
-                    </label>
-
-                    <label className="detail-field">
-                      <span>본문</span>
-                      <textarea
-                        className="detail-textarea"
-                        value={editContent}
-                        onChange={(event) => setEditContent(event.target.value)}
-                      />
-                    </label>
-                  </div>
-
-                  <div className="detail-actions">
-                    <button
-                      type="button"
-                      className="button button-solid"
-                      onClick={() => (isSpeaking ? onStopSpeaking() : onListenEntry(selectedEntry))}
-                      disabled={!speechSupported}
-                    >
-                      {isSpeaking ? '정지' : '전체 듣기'}
-                    </button>
-                    <button
-                      type="button"
-                      className="button button-outline"
-                      onClick={() => onSaveSelected({ title: editTitle, content: editContent })}
-                    >
-                      저장
-                    </button>
-                    <button type="button" className="button button-outline" onClick={onCopySelected}>
-                      복사
-                    </button>
-                    <button type="button" className="button button-outline" onClick={onOpenNaturalReader}>
-                      NaturalReader에서 열기
-                    </button>
-                    <button
-                      type="button"
-                      className="button button-outline"
-                      onClick={onCopyAndOpenNaturalReader}
-                    >
-                      복사 후 열기
-                    </button>
-                    <button
-                      type="button"
-                      className="button button-outline button-danger"
-                      onClick={onDeleteSelected}
-                    >
-                      삭제
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="empty-panel">표시할 글이 없습니다.</div>
-              )}
-            </section>
-          </section>
-        )}
+    <div className="limit-progress">
+      <div className="limit-progress-head">
+        <span>{label}</span>
+        <strong className={exceeded ? 'metric-rose' : ''}>
+          {formatter(used)} / {formatter(limit)}
+        </strong>
       </div>
-    </main>
+      <div className="progress-track">
+        <div
+          className={`progress-fill${exceeded ? ' danger' : ''}`}
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <div className="limit-progress-meta">
+        <span>{formatNumber(percent, 1)}%</span>
+        <span>{exceeded ? 'Exceeded' : `Remaining ${formatter(remaining)}`}</span>
+      </div>
+    </div>
   );
 }
 
 function App() {
-  const [storedEntries, setStoredEntries] = useLocalStorage(STORAGE_KEY, [], {
-    resetKey: STORAGE_RESET_KEY,
-    resetVersion: STORAGE_RESET_VERSION
-  });
-  const [route, setRoute] = useState(() => parseRoute());
-  const [draft, setDraft] = useState('');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [typeFilter, setTypeFilter] = useState(ALL_TYPES_LABEL);
-  const [selectedId, setSelectedId] = useState('');
-  const [speechSupported, setSpeechSupported] = useState(false);
-  const [speakingEntryId, setSpeakingEntryId] = useState('');
-  const textareaRef = useRef(null);
+  const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
+  const [sourceMode, setSourceMode] = useState('live');
+  const [status, setStatus] = useState('idle');
+  const [lastError, setLastError] = useState('');
+  const [lastRawText, setLastRawText] = useState('');
+  const [backendSource, setBackendSource] = useState('unknown');
+  const [usageLimitSource, setUsageLimitSource] = useState('unknown');
+  const [snapshot, setSnapshot] = useState(EMPTY_SNAPSHOT);
+  const [usageLimit, setUsageLimit] = useState(EMPTY_USAGE_LIMIT);
+  const [limits, setLimits] = useState(() => readStoredLimits());
 
-  const entries = useMemo(
-    () =>
-      normalizeEntries(storedEntries).sort((firstEntry, secondEntry) =>
-        `${secondEntry.date} ${secondEntry.time}`.localeCompare(`${firstEntry.date} ${firstEntry.time}`)
-      ),
-    [storedEntries]
-  );
-
-  const entriesByDate = useMemo(() => {
-    const groupedMap = new Map();
-
-    entries.forEach((entry) => {
-      const bucket = groupedMap.get(entry.date) || [];
-      bucket.push(entry);
-      groupedMap.set(entry.date, bucket);
-    });
-
-    return groupedMap;
-  }, [entries]);
-
-  const availableTypes = [ALL_TYPES_LABEL, ...new Set(entries.map((entry) => entry.type))];
-  const filteredEntries = entries.filter((entry) => {
-    const matchesType = typeFilter === ALL_TYPES_LABEL || entry.type === typeFilter;
-    const searchable = `${entry.title} ${entry.preview} ${entry.content} ${(entry.tags || []).join(' ')}`.toLowerCase();
-    const matchesSearch = searchable.includes(searchTerm.trim().toLowerCase());
-
-    return matchesType && matchesSearch;
-  });
-
-  const groupedEntries = filteredEntries.reduce((groups, entry) => {
-    const existingGroup = groups.find((group) => group.date === entry.date);
-
-    if (existingGroup) {
-      existingGroup.items.push(entry);
-      return groups;
-    }
-
-    groups.push({ date: entry.date, items: [entry] });
-    return groups;
-  }, []);
-
-  const historyEntries = route.name === 'history' ? entriesByDate.get(route.date) || [] : [];
-  const selectedHistoryEntry =
-    historyEntries.find((entry) => entry.id === selectedId) || historyEntries[0] || null;
+  const endpoint = sourceMode === 'sample' ? SAMPLE_ENDPOINT : DEFAULT_ENDPOINT;
+  const usageLimitEndpoint =
+    sourceMode === 'sample' ? SAMPLE_USAGE_LIMIT_ENDPOINT : DEFAULT_USAGE_LIMIT_ENDPOINT;
+  const costLimitValue = parseLimit(limits.costLimit);
+  const tokenLimitValue = parseLimit(limits.tokenLimit);
 
   useEffect(() => {
-    setSpeechSupported('speechSynthesis' in window);
+    window.localStorage.setItem(LIMITS_STORAGE_KEY, JSON.stringify(limits));
+  }, [limits]);
 
-    return () => {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
+  useEffect(() => {
+    let cancelled = false;
+    let timerId = 0;
+
+    const loadDashboardData = async () => {
+      setStatus((current) => (current === 'success' ? 'refreshing' : 'loading'));
+
+      try {
+        const [metricsResponse, usageLimitResponse] = await Promise.all([
+          fetch(endpoint, {
+            headers: {
+              Accept: 'text/plain'
+            },
+            cache: 'no-store'
+          }),
+          fetch(usageLimitEndpoint, {
+            headers: {
+              Accept: 'application/json'
+            },
+            cache: 'no-store'
+          })
+        ]);
+
+        if (!metricsResponse.ok) {
+          throw new Error(`Metrics HTTP ${metricsResponse.status}`);
+        }
+
+        if (!usageLimitResponse.ok) {
+          throw new Error(`Usage limit HTTP ${usageLimitResponse.status}`);
+        }
+
+        const [rawMetricsText, rawUsageLimit] = await Promise.all([
+          metricsResponse.text(),
+          usageLimitResponse.json()
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        setLastRawText(rawMetricsText);
+        setBackendSource(metricsResponse.headers.get('x-claude-metrics-source') || 'unknown');
+        setUsageLimitSource(
+          usageLimitResponse.headers.get('x-claude-usage-limit-source') || 'unknown'
+        );
+        setSnapshot(aggregateMetrics(parsePrometheusMetrics(rawMetricsText)));
+        setUsageLimit(normalizeUsageLimit(rawUsageLimit));
+        setLastError('');
+        setStatus('success');
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setLastError(error instanceof Error ? error.message : String(error));
+        setBackendSource('unavailable');
+        setUsageLimitSource('unavailable');
+        setStatus('error');
+      }
+
+      if (!cancelled) {
+        timerId = window.setTimeout(loadDashboardData, refreshMs);
       }
     };
-  }, []);
 
-  useEffect(() => {
-    const handlePopState = () => {
-      setRoute(parseRoute());
+    loadDashboardData();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timerId);
     };
+  }, [endpoint, refreshMs, usageLimitEndpoint]);
 
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-
-  useEffect(() => {
-    if (route.name === 'history' && selectedHistoryEntry && selectedId !== selectedHistoryEntry.id) {
-      setSelectedId(selectedHistoryEntry.id);
-    }
-  }, [route, selectedHistoryEntry, selectedId]);
-
-  const navigateToLibrary = () => {
-    pushRoute('/', setRoute);
-  };
-
-  const navigateToHistoryDate = (dateKey) => {
-    if (!dateKey) {
-      return;
+  const connectionLabel = useMemo(() => {
+    if (status === 'success' || status === 'refreshing') {
+      return 'CONNECTED';
     }
 
-    pushRoute(`/history/${dateKey}`, setRoute);
-  };
-
-  const handleOpenEntry = (entry, shouldSpeak = false) => {
-    setSelectedId(entry.id);
-    navigateToHistoryDate(entry.date);
-
-    if (shouldSpeak) {
-      handleListenEntry(entry);
-    }
-  };
-
-  const stopSpeaking = () => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+    if (status === 'error') {
+      return 'DISCONNECTED';
     }
 
-    setSpeakingEntryId('');
-  };
+    return 'CONNECTING';
+  }, [status]);
 
-  const handleListenEntry = (entry) => {
-    if (!speechSupported) {
-      return;
-    }
-
-    stopSpeaking();
-    const utterance = new SpeechSynthesisUtterance(entry.content || entry.preview || entry.title);
-    utterance.onend = () => setSpeakingEntryId('');
-    utterance.onerror = () => setSpeakingEntryId('');
-    setSpeakingEntryId(entry.id);
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const handleOrganizeDraft = () => {
-    const parsedEntries = parseEntriesFromDraft(draft);
-
-    if (parsedEntries.length === 0) {
-      textareaRef.current?.focus();
-      return;
-    }
-
-    setStoredEntries((currentEntries) => [...parsedEntries, ...normalizeEntries(currentEntries)]);
-    setDraft('');
-    setSelectedId(parsedEntries[0].id);
-    navigateToHistoryDate(parsedEntries[0].date);
-  };
-
-  const handleClearData = () => {
-    stopSpeaking();
-    setStoredEntries([]);
-    setSelectedId('');
-    navigateToLibrary();
-  };
-
-  const handleCopySelected = async () => {
-    if (!selectedHistoryEntry || !navigator.clipboard) {
-      return false;
-    }
-
-    const payload = `${selectedHistoryEntry.title}\n${selectedHistoryEntry.content || selectedHistoryEntry.preview}`;
-
-    try {
-      await navigator.clipboard.writeText(payload);
-      return true;
-    } catch (error) {
-      console.error('Clipboard copy failed:', error);
-      return false;
-    }
-  };
-
-  const handleOpenNaturalReader = () => {
-    window.open(NATURAL_READER_URL, '_blank', 'noopener,noreferrer');
-  };
-
-  const handleCopyAndOpenNaturalReader = async () => {
-    await handleCopySelected();
-    handleOpenNaturalReader();
-  };
-
-  const handleDeleteSelected = () => {
-    if (!selectedHistoryEntry || route.name !== 'history') {
-      return;
-    }
-
-    if (speakingEntryId === selectedHistoryEntry.id) {
-      stopSpeaking();
-    }
-
-    const nextEntries = entries.filter((entry) => entry.id !== selectedHistoryEntry.id);
-    const nextSameDateEntries = nextEntries.filter((entry) => entry.date === route.date);
-
-    setStoredEntries(nextEntries);
-    setSelectedId(nextSameDateEntries[0]?.id || '');
-
-    if (nextSameDateEntries.length === 0) {
-      navigateToLibrary();
-    }
-  };
-
-  const handleSaveSelected = ({ title, content }) => {
-    if (!selectedHistoryEntry) {
-      return;
-    }
-
-    const patch = buildEntryPatch({ title, content, currentEntry: selectedHistoryEntry });
-
-    setStoredEntries((currentEntries) =>
-      normalizeEntries(currentEntries).map((entry) =>
-        entry.id === selectedHistoryEntry.id ? { ...entry, ...patch } : entry
-      )
-    );
-  };
-
-  if (route.name === 'history') {
-    return (
-      <HistoryPage
-        date={route.date}
-        entries={historyEntries}
-        selectedEntry={selectedHistoryEntry}
-        speechSupported={speechSupported}
-        isSpeaking={speakingEntryId === selectedHistoryEntry?.id}
-        onBack={navigateToLibrary}
-        onSelectEntry={setSelectedId}
-        onListenEntry={(entry) => {
-          setSelectedId(entry.id);
-          handleListenEntry(entry);
-        }}
-        onStopSpeaking={stopSpeaking}
-        onCopySelected={handleCopySelected}
-        onOpenNaturalReader={handleOpenNaturalReader}
-        onCopyAndOpenNaturalReader={handleCopyAndOpenNaturalReader}
-        onDeleteSelected={handleDeleteSelected}
-        onSaveSelected={handleSaveSelected}
-      />
-    );
-  }
+  const connectionHint =
+    sourceMode === 'sample'
+      ? 'Sample mode uses bundled payloads and does not require a live backend.'
+      : 'Live mode requires reachable same-origin /api/metrics and /api/usage-limit endpoints.';
 
   return (
-    <LibraryPage
-      entries={entries}
-      groupedEntries={groupedEntries}
-      availableTypes={availableTypes}
-      searchTerm={searchTerm}
-      setSearchTerm={setSearchTerm}
-      typeFilter={typeFilter}
-      setTypeFilter={setTypeFilter}
-      draft={draft}
-      setDraft={setDraft}
-      onOrganizeDraft={handleOrganizeDraft}
-      onClearData={handleClearData}
-      onOpenDate={navigateToHistoryDate}
-      onOpenEntry={handleOpenEntry}
-      textareaRef={textareaRef}
-    />
+    <main className="dashboard-shell">
+      <section className="hero-panel">
+        <div className="hero-copy">
+          <p className="eyebrow">Claude Code PWA</p>
+          <h1>Usage Dashboard</h1>
+          <p className="hero-summary">
+            Monitor Claude Code telemetry and plan usage in the browser. Live mode polls local
+            same-origin API routes on a fixed interval.
+          </p>
+        </div>
+
+        <div className="hero-actions">
+          <button
+            type="button"
+            className={`mode-chip${sourceMode === 'live' ? ' active' : ''}`}
+            onClick={() => setSourceMode('live')}
+          >
+            Live
+          </button>
+          <button
+            type="button"
+            className={`mode-chip${sourceMode === 'sample' ? ' active' : ''}`}
+            onClick={() => setSourceMode('sample')}
+          >
+            Sample
+          </button>
+          <label className="refresh-control">
+            <span>Refresh</span>
+            <select value={refreshMs} onChange={(event) => setRefreshMs(Number(event.target.value))}>
+              <option value={1000}>1s</option>
+              <option value={3000}>3s</option>
+              <option value={5000}>5s</option>
+              <option value={10000}>10s</option>
+              <option value={30000}>30s</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section className="status-band">
+        <div className={`status-pill ${connectionLabel.toLowerCase()}`}>{connectionLabel}</div>
+        <div className="status-grid status-grid-wide">
+          <MetricRow label="Metrics Source" value={backendSource} />
+          <MetricRow label="Usage Limit Source" value={usageLimitSource} />
+          <MetricRow label="Updated" value={formatTimestamp(snapshot.collectedAt)} />
+          <MetricRow label="Metrics Path" value={endpoint} />
+          <MetricRow label="Usage Limit Path" value={usageLimitEndpoint} />
+          <MetricRow label="Hint" value={connectionHint} />
+        </div>
+      </section>
+
+      <section className="dashboard-grid">
+        <article className="panel plan-usage-panel">
+          <div className="panel-header">
+            <div>
+              <h2>{usageLimit.label}</h2>
+              <p>{usageLimit.description || 'Plan session usage returned by /api/usage-limit.'}</p>
+            </div>
+            <span className="plan-badge">{usageLimit.plan || 'Unknown plan'}</span>
+          </div>
+
+          <div className="plan-usage-meta">
+            <div>
+              <span className="mini-label">{usageLimit.scope}</span>
+              <strong className="plan-usage-value">{formatNumber(usageLimit.usedPercent)}%</strong>
+            </div>
+            <div>
+              <span className="mini-label">Reset</span>
+              <strong className="plan-usage-subvalue">
+                {usageLimit.resetLabel || formatTimestamp(usageLimit.resetAt)}
+              </strong>
+            </div>
+            <div>
+              <span className="mini-label">Status</span>
+              <strong className="plan-usage-subvalue">
+                {usageLimit.statusText || `${formatNumber(usageLimit.usedPercent)}% used`}
+              </strong>
+            </div>
+          </div>
+
+          <div className="progress-track plan-usage-track">
+            <div className="progress-fill" style={{ width: `${usageLimit.usedPercent}%` }} />
+          </div>
+        </article>
+
+        <article className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>Manual Limits</h2>
+              <p>Track your own cost or token ceilings alongside the plan usage block.</p>
+            </div>
+          </div>
+
+          <div className="limit-grid">
+            <label className="limit-field">
+              <span>Cost limit (USD)</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={limits.costLimit}
+                onChange={(event) => setLimits((current) => ({ ...current, costLimit: event.target.value }))}
+                placeholder="20"
+              />
+            </label>
+
+            <label className="limit-field">
+              <span>Token limit</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={limits.tokenLimit}
+                onChange={(event) => setLimits((current) => ({ ...current, tokenLimit: event.target.value }))}
+                placeholder="100000"
+              />
+            </label>
+          </div>
+
+          <div className="metric-list">
+            <LimitProgress
+              label="Cost"
+              used={snapshot.costUsd}
+              limit={costLimitValue}
+              formatter={(value) => formatCurrency(value)}
+            />
+            <LimitProgress
+              label="Tokens"
+              used={snapshot.tokens.total}
+              limit={tokenLimitValue}
+              formatter={(value) => formatNumber(value)}
+            />
+          </div>
+        </article>
+      </section>
+
+      <section className="stats-grid">
+        <StatCard label="Session Cost" value={formatCurrency(snapshot.costUsd)} tone="warm" />
+        <StatCard label="Total Tokens" value={formatNumber(snapshot.tokens.total)} tone="alert" />
+        <StatCard
+          label="Active Time"
+          value={formatDuration(snapshot.activeSeconds.total)}
+          meta={`cli ${formatDuration(snapshot.activeSeconds.cli)} / user ${formatDuration(snapshot.activeSeconds.user)}`}
+        />
+        <StatCard label="Sessions" value={formatNumber(snapshot.sessions)} />
+      </section>
+
+      <section className="dashboard-grid">
+        <article className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>Token Breakdown</h2>
+              <p>Cumulative token usage grouped by request type.</p>
+            </div>
+          </div>
+
+          <div className="metric-list">
+            <MetricRow label="Input" value={formatNumber(snapshot.tokens.input)} accent="cyan" />
+            <MetricRow label="Output" value={formatNumber(snapshot.tokens.output)} accent="amber" />
+            <MetricRow label="Cache Read" value={formatNumber(snapshot.tokens.cacheRead)} accent="green" />
+            <MetricRow label="Cache Write" value={formatNumber(snapshot.tokens.cacheCreation)} accent="pink" />
+          </div>
+        </article>
+
+        <article className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>Activity</h2>
+              <p>Code change and workflow counters.</p>
+            </div>
+          </div>
+
+          <div className="metric-list">
+            <MetricRow label="Lines Added" value={formatNumber(snapshot.lines.added)} accent="green" />
+            <MetricRow label="Lines Removed" value={formatNumber(snapshot.lines.removed)} accent="rose" />
+            <MetricRow label="Commits" value={formatNumber(snapshot.commits)} />
+            <MetricRow label="Pull Requests" value={formatNumber(snapshot.pullRequests)} />
+            <MetricRow label="Edit Accept" value={formatNumber(snapshot.editDecisions.accept)} accent="green" />
+            <MetricRow label="Edit Reject" value={formatNumber(snapshot.editDecisions.reject)} accent="rose" />
+          </div>
+        </article>
+      </section>
+
+      <section className="dashboard-grid">
+        <article className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>Live Connection Checklist</h2>
+              <p>Use this when the deployed app shows DISCONNECTED.</p>
+            </div>
+          </div>
+
+          <div className="notes-list">
+            <p>1. Confirm your server exposes same-origin `/api/metrics` and `/api/usage-limit` endpoints.</p>
+            <p>2. In local dev, both endpoints default to sample mode unless upstream values are set.</p>
+            <p>3. In production, set upstream environment variables so both API routes point at real data.</p>
+            <p>4. If you only want to verify the UI, switch to Sample mode.</p>
+          </div>
+
+          {lastError ? (
+            <div className="error-box">
+              <strong>Last error</strong>
+              <p>{lastError}</p>
+            </div>
+          ) : null}
+        </article>
+
+        <article className="panel models-panel">
+          <div className="panel-header">
+            <div>
+              <h2>Top Models</h2>
+              <p>Cost and token totals by model.</p>
+            </div>
+          </div>
+
+          {snapshot.models.length === 0 ? (
+            <div className="empty-state">No model usage has been collected yet.</div>
+          ) : (
+            <div className="models-table">
+              <div className="models-row models-head">
+                <span>Model</span>
+                <span>Cost</span>
+                <span>Tokens</span>
+              </div>
+              {snapshot.models.map((model) => (
+                <div key={model.name} className="models-row">
+                  <span>{model.name}</span>
+                  <strong>{formatCurrency(model.costUsd)}</strong>
+                  <strong>{formatNumber(model.tokens)}</strong>
+                </div>
+              ))}
+            </div>
+          )}
+        </article>
+      </section>
+
+      <section className="panel notes-panel">
+        <div className="panel-header">
+          <div>
+            <h2>Raw Metrics</h2>
+            <p>Inspect the current Prometheus payload received by the app.</p>
+          </div>
+        </div>
+
+        <details className="raw-metrics" open={sourceMode === 'sample'}>
+          <summary>Open payload</summary>
+          <pre>{lastRawText || 'No metrics loaded yet.'}</pre>
+        </details>
+      </section>
+    </main>
   );
 }
 

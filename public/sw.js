@@ -1,4 +1,4 @@
-const CACHE_NAME = 'daily-focus-v1';
+const CACHE_NAME = 'claude-usage-dashboard-v1';
 const BASE_PATH = new URL(self.registration.scope).pathname;
 const INDEX_PATH = new URL('index.html', self.registration.scope).pathname;
 const OFFLINE_PATH = new URL('offline.html', self.registration.scope).pathname;
@@ -10,6 +10,7 @@ const APP_SHELL = [
   INDEX_PATH,
   toScopedPath('manifest.json'),
   OFFLINE_PATH,
+  toScopedPath('claude-metrics-sample.prom'),
   toScopedPath('icons/icon-192.png'),
   toScopedPath('icons/icon-512.png'),
   toScopedPath('icons/icon-maskable-512.png')

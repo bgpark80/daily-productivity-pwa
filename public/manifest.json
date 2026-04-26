@@ -1,12 +1,12 @@
 {
-  "name": "Daily Focus",
-  "short_name": "Daily Focus",
-  "description": "A simple personal productivity app for everyday planning.",
+  "name": "Claude Usage Dashboard",
+  "short_name": "Claude Usage",
+  "description": "A PWA dashboard for monitoring Claude Code telemetry on the web.",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
-  "background_color": "#f5efe6",
-  "theme_color": "#1f7a6d",
+  "background_color": "#f4efe6",
+  "theme_color": "#18242f",
   "orientation": "portrait-primary",
   "icons": [
     {
