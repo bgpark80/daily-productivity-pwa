@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "claude:web": "vite --host --port 5173 --strictPort",
     "claude:pwa": "node scripts/serve-claude-pwa.mjs",
+    "cf:dev": "npm run build && npx wrangler pages dev dist",
+    "cf:deploy": "npm run build && npx wrangler pages deploy dist",
     "claude:monitor": "node scripts/claude-usage-monitor.mjs",
     "claude:monitor:once": "node scripts/claude-usage-monitor.mjs --once",
     "claude:monitor:sample": "node scripts/claude-usage-monitor.mjs --input scripts/claude-metrics-sample.prom --once"

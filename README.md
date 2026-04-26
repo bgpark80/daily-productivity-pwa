@@ -1,96 +1,70 @@
 # Claude Usage Dashboard PWA
 
-Claude Code telemetry usage dashboard for web deployment.
+Cloudflare Pages deployment-ready dashboard for Claude Code telemetry and plan usage.
 
-## What it shows
+## What changed for Cloudflare
 
-- session cost estimate
-- token usage by type
-- session count
-- lines added and removed
-- commit and pull request counts
-- active time and edit accept/reject counts
-- model-by-model cost and token totals
-- manual cost and token limits
+- `/api/metrics` is now implemented as a Pages Function at [functions/api/metrics.js](/abs/path/D:/GIT_PWA/functions/api/metrics.js:1)
+- `/api/usage-limit` is now implemented as a Pages Function at [functions/api/usage-limit.js](/abs/path/D:/GIT_PWA/functions/api/usage-limit.js:1)
+- Cloudflare Pages config lives in [wrangler.jsonc](/abs/path/D:/GIT_PWA/wrangler.jsonc:1)
+- deploy should use `wrangler pages deploy`, not `wrangler deploy`
 
-## Important limitation
-
-This app visualizes telemetry usage. It does not know the exact remaining quota of a personal Claude subscription.
-
-## Unified local and production model
-
-Local development and production now use the same contract:
-
-- the frontend reads only `GET /api/metrics`
-- the backend decides whether `/api/metrics` serves sample data or proxies an upstream metrics source
-
-Supported environment variables:
-
-- `CLAUDE_METRICS_MODE=sample|upstream`
-- `CLAUDE_METRICS_UPSTREAM=http://host:port/metrics`
-- `CLAUDE_METRICS_SAMPLE_PATH=relative/or/absolute/path`
-- `CLAUDE_USAGE_LIMIT_MODE=sample|upstream`
-- `CLAUDE_USAGE_LIMIT_UPSTREAM=https://host/api/usage-limit.json`
-- `CLAUDE_USAGE_LIMIT_SAMPLE_PATH=relative/or/absolute/path`
-
-Behavior:
-
-- if `CLAUDE_METRICS_MODE` is omitted and no upstream is set, `/api/metrics` serves the bundled sample file
-- if `CLAUDE_METRICS_MODE=upstream`, `/api/metrics` proxies `CLAUDE_METRICS_UPSTREAM`
-- if `CLAUDE_USAGE_LIMIT_MODE` is omitted and no upstream is set, `/api/usage-limit` serves the bundled sample JSON
-- if `CLAUDE_USAGE_LIMIT_MODE=upstream`, `/api/usage-limit` proxies `CLAUDE_USAGE_LIMIT_UPSTREAM`
+This matters because your project is a static frontend plus same-origin API routes. That matches Cloudflare Pages Functions, not a plain Workers script deploy.
 
 ## Local development
 
-Default local run:
+Vite only:
 
 ```powershell
 cd D:\GIT_PWA
 npm run claude:web
 ```
 
-Then open:
-
-```text
-http://localhost:5173
-```
-
-This works immediately because local `/api/metrics` defaults to sample mode.
-
-### Local development with a real metrics upstream
+Cloudflare Pages locally:
 
 ```powershell
-$env:CLAUDE_METRICS_MODE="upstream"
-$env:CLAUDE_METRICS_UPSTREAM="http://127.0.0.1:9464/metrics"
-$env:CLAUDE_USAGE_LIMIT_MODE="upstream"
-$env:CLAUDE_USAGE_LIMIT_UPSTREAM="https://your-server.example/api/usage-limit.json"
-npm run claude:web
+cd D:\GIT_PWA
+npm run cf:dev
 ```
 
-## Production-style local run
+## Cloudflare deploy
+
+Use this command:
 
 ```powershell
-npm run build
-npm run claude:pwa
+cd D:\GIT_PWA
+npm run cf:deploy
 ```
 
-Then open:
-
-```text
-http://localhost:4173
-```
-
-### Production-style local run with a real metrics upstream
+Do not use:
 
 ```powershell
-$env:CLAUDE_METRICS_MODE="upstream"
-$env:CLAUDE_METRICS_UPSTREAM="http://127.0.0.1:9464/metrics"
-$env:CLAUDE_USAGE_LIMIT_MODE="upstream"
-$env:CLAUDE_USAGE_LIMIT_UPSTREAM="https://your-server.example/api/usage-limit.json"
-npm run build
-npm run claude:pwa
+wrangler deploy
 ```
 
-## Deployment note
+## Required environment variables
 
-In production, deploy the static frontend and make sure the same origin serves both `/api/metrics` and `/api/usage-limit`.
+Pages Functions can read these variables from Cloudflare Pages project settings:
+
+- `CLAUDE_METRICS_MODE=sample|upstream`
+- `CLAUDE_METRICS_UPSTREAM=https://example.com/metrics`
+- `CLAUDE_USAGE_LIMIT_MODE=sample|upstream`
+- `CLAUDE_USAGE_LIMIT_UPSTREAM=https://example.com/usage-limit.json`
+
+If you do not set upstream values, the app falls back to bundled sample responses.
+
+## Cloudflare token notes
+
+If you deploy from CI or a non-interactive environment, use:
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+
+For Pages deploys, the token should include at least `Pages Write` on the target account.
+
+Reference:
+
+- Cloudflare Pages Functions routing: https://developers.cloudflare.com/pages/functions/routing/
+- Cloudflare Pages Wrangler configuration: https://developers.cloudflare.com/pages/functions/wrangler-configuration/
+- Cloudflare Direct Upload: https://developers.cloudflare.com/pages/get-started/direct-upload/
+- Cloudflare API token permissions: https://developers.cloudflare.com/fundamentals/api/reference/permissions/
